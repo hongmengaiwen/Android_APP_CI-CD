@@ -1,4 +1,4 @@
-name: Android 自动构建与质量检查  # 工作流名称
+name: Android 自動構築と品質検査  # ワークフロー名
 
 on:
   push:
@@ -9,82 +9,82 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 拉取代码
+      - name: コードを取得
         uses: actions/checkout@v4
 
-      - name: 安装 JDK 17
+      - name: JDK 17をインストール
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
           cache: gradle
 
-      - name: 安装 Android SDK
+      - name: Android SDKをインストール
         uses: android-actions/setup-android@v3
         with:
           sdk-version: 36
           build-tools: 36.0.0
 
-      # 静态代码分析（Lint）并生成报告
-      - name: 执行 Lint 静态分析
+      # 静的コード解析（Lint）とレポート生成
+      - name: Lint静的解析を実行
         run: |
           chmod +x ./gradlew
-          # 执行 Release 版本的 Lint 检查，生成 HTML 报告
+          # ReleaseバージョンのLintチェックを実行し、HTMLレポートを生成
           ./gradlew lintRelease
-        continue-on-error: false  # Lint 失败则终止流程
+        continue-on-error: false  # Lintに失敗した場合はワークフローを終了
 
-      # 上传 Lint 报告
-      - name: 上传 Lint 报告
+      # Lintレポートをアップロード
+      - name: Lintレポートをアップロード
         uses: actions/upload-artifact@v4
         with:
           name: lint-report
-          path: app/build/reports/lint-results-release.html  # Lint 报告路径
+          path: app/build/reports/lint-results-release.html  # Lintレポートのパス
 
-      # 执行单元测试并生成报告
-      - name: 运行单元测试
+      # 単体テストを実行してレポートを生成
+      - name: 単体テストを実行
         run: |
-          # 执行 Release 版本的单元测试，生成测试报告
+          # Releaseバージョンの単体テストを実行し、テストレポートを生成
           ./gradlew testReleaseUnitTest
-        continue-on-error: false  # 测试失败则终止流程
+        continue-on-error: false  # テストに失敗した場合はワークフローを終了
       
-      # 运行单元测试后，添加此步骤探测实际路径
-      - name: 探测测试报告实际路径
+      # 単体テスト実行後、実際のパスを確認するステップを追加
+      - name: テストレポートの実際のパスを確認
         run: |
-          echo "===== 列出 test-results 目录下的所有文件 ====="
-          ls -R app/build/test-results/  # 递归列出所有子目录和文件
-          echo "===== 列出 reports/tests 目录下的所有文件 ====="
+          echo "===== test-resultsディレクトリ配下のファイルを一覧表示 ====="
+          ls -R app/build/test-results/  # すべてのサブディレクトリとファイルを再帰的に一覧表示
+          echo "===== reports/testsディレクトリ配下のファイルを一覧表示 ====="
           ls -R app/build/reports/tests/
 
-      # 上传单元测试报告（包含 XML 结果和 HTML 报告）
-      - name: 上传单元测试报告
+      # 単体テストレポートをアップロード（XML結果とHTMLレポートを含む）
+      - name: 単体テストレポートをアップロード
         uses: actions/upload-artifact@v4
         with:
           name: unit-test-report
           path: |
-            # 测试结果 XML（可在 Github 显示汇总）
+            # テスト結果XML（Githubでサマリーを表示可能）
             app/build/test-results/testReleaseUnitTest/  
-            # 可视化 HTML 报告
+            # 可視化HTMLレポート
             app/build/reports/tests/testReleaseUnitTest/  
 
-      # 准备签名文件
-      - name: 准备签名文件
+      # 署名ファイルを準備
+      - name: 署名ファイルを準備
         run: |
           mkdir -p app/signing
           echo "${{ secrets.KEYSTORE_FILE }}" | base64 --decode > app/signing/release.keystore
 
-      # 构建并签名 Release APK（仅在 Lint 和测试通过后执行）
-      - name: 构建 APK
+      # Release APKを構築して署名（Lintとテストが通過した場合のみ実行）
+      - name: APKを構築
         run: |
           chmod +x ./gradlew
-          # 传递签名文件的绝对路径（使用 GITHUB_WORKSPACE 确保基准正确）
+          # 署名ファイルの絶対パスを渡す（GITHUB_WORKSPACEを使用して基準を確保）
           ./gradlew assembleRelease \
             -Pandroid.injected.signing.store.file=${GITHUB_WORKSPACE}/app/signing/release.keystore \
             -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
             -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
             -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
 
-      # 上传 APK 产物
-      - name: 上传 APK
+      # APK成果物をアップロード
+      - name: APKをアップロード
         uses: actions/upload-artifact@v4
         with:
           name: Android-APP-Release
