@@ -22,14 +22,11 @@ jobs:
       - name: Android SDKをインストール
         uses: android-actions/setup-android@v3
         with:
-          sdk-version: 36
-          build-tools: 36.0.0
-
           packages: |
-           platforms;android-36 
+           platforms;android-36
            build-tools;36.0.0 
-           cmdline-tools-version: latest
-           accept-android-sdk-licenses: true
+          cmdline-tools-version: latest
+          accept-android-sdk-licenses: true
 
       # 静的コード解析（Lint）とレポート生成
       - name: Lint静的解析を実行
