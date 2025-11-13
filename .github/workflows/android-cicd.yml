@@ -87,5 +87,5 @@ jobs:
       - name: 上传 APK
         uses: actions/upload-artifact@v4
         with:
-          name: 我的Android应用
+          name: Android-APP-Release
           path: app/build/outputs/apk/release/app-release.apk
