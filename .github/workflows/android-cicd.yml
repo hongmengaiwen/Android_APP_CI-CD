@@ -61,8 +61,10 @@ jobs:
         with:
           name: unit-test-report
           path: |
-            app/build/test-results/testReleaseUnitTest/  # 测试结果 XML（可在 Github 显示汇总）
-            app/build/reports/tests/testReleaseUnitTest/  # 可视化 HTML 报告
+            # 测试结果 XML（可在 Github 显示汇总）
+            app/build/test-results/testReleaseUnitTest/  
+            # 可视化 HTML 报告
+            app/build/reports/tests/testReleaseUnitTest/  
 
       # 准备签名文件
       - name: 准备签名文件
