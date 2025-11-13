@@ -65,8 +65,10 @@ jobs:
       # 构建并签名 Release APK（仅在 Lint 和测试通过后执行）
       - name: 构建 APK
         run: |
+          chmod +x ./gradlew
+          # 使用绝对路径指定签名文件（${GITHUB_WORKSPACE} 是 Github 工作流的项目根目录环境变量）
           ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=./signing/release.keystore \
+            -Pandroid.injected.signing.store.file=${GITHUB_WORKSPACE}/app/signing/release.keystore \
             -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
             -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
             -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
