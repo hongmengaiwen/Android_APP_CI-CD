@@ -46,6 +46,14 @@ jobs:
           # 执行 Release 版本的单元测试，生成测试报告
           ./gradlew testReleaseUnitTest
         continue-on-error: false  # 测试失败则终止流程
+      
+      # 运行单元测试后，添加此步骤探测实际路径
+      - name: 探测测试报告实际路径
+        run: |
+          echo "===== 列出 test-results 目录下的所有文件 ====="
+          ls -R app/build/test-results/  # 递归列出所有子目录和文件
+          echo "===== 列出 reports/tests 目录下的所有文件 ====="
+          ls -R app/build/reports/tests/
 
       # 上传单元测试报告（包含 XML 结果和 HTML 报告）
       - name: 上传单元测试报告
