@@ -19,11 +19,42 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
+      # 新增：安装模拟器依赖库（Ubuntu运行模拟器必需）
+      - name: 模拟器依赖库安装
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libqt5widgets5
+
       - name: Android SDKをインストール
         uses: android-actions/setup-android@v3
         with:
           sdk-version: 36
           build-tools: 36.0.0
+          # 新增：添加UI测试需要的系统镜像（与SDK版本匹配）
+          system-images: android-36;google_apis;x86_64
+
+      # 新增：创建并启动Android模拟器
+      - name: 创建模拟器
+        run: |
+          avdmanager create avd \
+            --name test_emulator \
+            --package "system-images;android-36;google_apis;x86_64" \
+            --device "pixel_6" \
+            --force
+
+      - name: 启动模拟器
+        run: |
+          emulator -avd test_emulator \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            &
+
+      - name: 等待模拟器启动
+        run: |
+          adb wait-for-device
+          while [[ "$(adb get-state)" != "device" ]]; do sleep 1; done
+          sleep 30  # 等待系统完全启动
 
       # 静的コード解析（Lint）とレポート生成
       - name: Lint静的解析を実行
@@ -65,6 +96,21 @@ jobs:
             app/build/test-results/testReleaseUnitTest/  
             # 可視化HTMLレポート
             app/build/reports/tests/testReleaseUnitTest/  
+
+      # 新增：执行UI测试（与Release变体保持一致）
+      - name: 実行UI测试
+        run: |
+          ./gradlew connectedReleaseAndroidTest  # 连接模拟器执行UI测试
+        continue-on-error: false
+
+      # 新增：上传UI测试报告
+      - name: UI测试レポートをアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-report
+          path: |
+            app/build/outputs/androidTest-results/connected/
+            app/build/reports/androidTests/connected/
 
       # 署名ファイルを準備
       - name: 署名ファイルを準備
