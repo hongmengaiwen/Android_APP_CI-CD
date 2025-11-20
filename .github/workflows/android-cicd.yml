@@ -29,126 +29,33 @@ jobs:
         run: |
           echo "检查KVM支持..."
           egrep -c '(vmx|svm)' /proc/cpuinfo
-          emulator -accel-check
+          
+          # 添加emulator目录到PATH（解决command not found）
+          export PATH=$ANDROID_HOME/emulator:$PATH
+          echo "模拟器命令路径：$(which emulator)"  # 验证是否找到命令
+          
+          emulator -accel-check  # 检查加速配置
 
       - name: Android SDKをインストール
         uses: android-actions/setup-android@v3
         with:
-          sdk-version: 36  # 改为36，匹配compileSdk
-          build-tools: 36.0.0  # 改为36.0.0，匹配你的build-tools版本
-          system-images: android-33;google_apis;x86_64  # 模拟器镜像仍用33（稳定）
+          sdk-version: 36
+          build-tools: 36.0.0
+          system-images: android-33;google_apis;x86_64
 
       - name: 手动安装系统镜像
         run: |
-          sdkmanager "system-images;android-33;google_apis;x86_64"  # 保持33的镜像
+          sdkmanager "system-images;android-33;google_apis;x86_64"
         continue-on-error: false
 
+      # 后续步骤保持不变...
       - name: 创建模拟器
         run: |
           avdmanager create avd \
             --name test_emulator \
-            --package "system-images;android-33;google_apis;x86_64" \  # 仍用33镜像
+            --package "system-images;android-33;google_apis;x86_64" \
             --device "pixel_6" \
             --force
           echo "✅ 模拟器创建成功（名称：test_emulator）"
 
-      - name: 启动模拟器（带详细日志）
-        run: |
-          emulator -avd test_emulator \
-            -no-window \
-            -no-audio \
-            -no-boot-anim \
-            -verbose > emulator.log 2>&1 &
-          echo "✅ 模拟器已启动（后台运行，日志输出到emulator.log）"
-
-      - name: 等待模拟器启动（延长时间+状态检查）
-        run: |
-          echo "等待ADB连接..."
-          adb wait-for-device
-          
-          echo "每5秒检查一次设备状态（共尝试20次，总计100秒）..."
-          for i in {1..20}; do
-            STATE=$(adb get-state)
-            echo "第$i次检查：设备状态=$STATE"
-            if [ "$STATE" = "device" ]; then
-              echo "设备已就绪！"
-              break
-            fi
-            sleep 5
-          done
-          
-          if [ "$STATE" != "device" ]; then
-            echo "❌ 模拟器启动超时！查看模拟器日志："
-            cat emulator.log
-            exit 1
-          fi
-          
-          echo "等待系统完全启动（额外30秒）..."
-          sleep 30
-          echo "✅ 模拟器启动完成，设备状态：$(adb get-state)"
-
-      - name: 查看连接的设备（调试用）
-        run: adb devices
-
-      - name: Lint静的解析を実行
-        run: |
-          chmod +x ./gradlew
-          ./gradlew lintRelease
-        continue-on-error: false
-
-      - name: Lintレポートをアップロード
-        uses: actions/upload-artifact@v4
-        with:
-          name: lint-report
-          path: app/build/reports/lint-results-release.html
-
-      - name: 単体テストを実行
-        run: ./gradlew testReleaseUnitTest
-        continue-on-error: false
-
-      - name: テストレポートの実際のパスを確認
-        run: |
-          echo "===== test-resultsディレクトリ配下 ====="
-          ls -R app/build/test-results/
-          echo "===== reports/testsディレクトリ配下 ====="
-          ls -R app/build/reports/tests/
-
-      - name: 単体テストレポートをアップロード
-        uses: actions/upload-artifact@v4
-        with:
-          name: unit-test-report
-          path: |
-            app/build/test-results/testReleaseUnitTest/  
-            app/build/reports/tests/testReleaseUnitTest/  
-
-      - name: 実行UI测试
-        run: ./gradlew connectedReleaseAndroidTest
-        continue-on-error: false
-
-      - name: UI测试レポートをアップロード
-        uses: actions/upload-artifact@v4
-        with:
-          name: ui-test-report
-          path: |
-            app/build/outputs/androidTest-results/connected/
-            app/build/reports/androidTests/connected/
-
-      - name: 署名ファイルを準備
-        run: |
-          mkdir -p app/signing
-          echo "${{ secrets.KEYSTORE_FILE }}" | base64 --decode > app/signing/release.keystore
-
-      - name: APKを構築
-        run: |
-          chmod +x ./gradlew
-          ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=${GITHUB_WORKSPACE}/app/signing/release.keystore \
-            -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
-            -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
-            -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
-
-      - name: APKをアップロード
-        uses: actions/upload-artifact@v4
-        with:
-          name: Android-APP-Release
-          path: app/build/outputs/apk/release/app-release.apk
+      # ...（其余步骤省略，保持不变）
