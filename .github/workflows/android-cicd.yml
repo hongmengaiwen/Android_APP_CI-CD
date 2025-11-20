@@ -1,4 +1,4 @@
-name: Android 自動構築と品質検査  # ワークフロー名
+name: Android 自動構築と品質検査
 
 on:
   push:
@@ -19,7 +19,6 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      # 新增：安装模拟器依赖库（Ubuntu运行模拟器必需）
       - name: 模拟器依赖库安装
         run: |
           sudo apt-get update
@@ -28,19 +27,23 @@ jobs:
       - name: Android SDKをインストール
         uses: android-actions/setup-android@v3
         with:
-          sdk-version: 36
-          build-tools: 36.0.0
-          # 新增：添加UI测试需要的系统镜像（与SDK版本匹配）
-          system-images: android-36;google_apis;x86_64
+          sdk-version: 33
+          build-tools: 33.0.1
+          system-images: android-33;google_apis;x86_64
 
-      # 新增：创建并启动Android模拟器
+      - name: 手动安装系统镜像
+        run: |
+          sdkmanager "system-images;android-33;google_apis;x86_64"
+        continue-on-error: false
+
       - name: 创建模拟器
         run: |
           avdmanager create avd \
             --name test_emulator \
-            --package "system-images;android-36;google_apis;x86_64" \
+            --package "system-images;android-33;google_apis;x86_64" \
             --device "pixel_6" \
             --force
+          echo "✅ 模拟器创建成功（名称：test_emulator）"
 
       - name: 启动模拟器
         run: |
@@ -49,61 +52,52 @@ jobs:
             -no-audio \
             -no-boot-anim \
             &
+          echo "✅ 模拟器已启动（后台运行）"
 
       - name: 等待模拟器启动
         run: |
           adb wait-for-device
           while [[ "$(adb get-state)" != "device" ]]; do sleep 1; done
-          sleep 30  # 等待系统完全启动
+          sleep 30
+          echo "✅ 模拟器已完全启动，设备状态：$(adb get-state)"
 
-      # 静的コード解析（Lint）とレポート生成
       - name: Lint静的解析を実行
         run: |
           chmod +x ./gradlew
-          # ReleaseバージョンのLintチェックを実行し、HTMLレポートを生成
           ./gradlew lintRelease
-        continue-on-error: false  # Lintに失敗した場合はワークフローを終了
+        continue-on-error: false
 
-      # Lintレポートをアップロード
       - name: Lintレポートをアップロード
         uses: actions/upload-artifact@v4
         with:
           name: lint-report
-          path: app/build/reports/lint-results-release.html  # Lintレポートのパス
+          path: app/build/reports/lint-results-release.html
 
-      # 単体テストを実行してレポートを生成
       - name: 単体テストを実行
         run: |
-          # Releaseバージョンの単体テストを実行し、テストレポートを生成
           ./gradlew testReleaseUnitTest
-        continue-on-error: false  # テストに失敗した場合はワークフローを終了
-      
-      # 単体テスト実行後、実際のパスを確認するステップを追加
+        continue-on-error: false
+
       - name: テストレポートの実際のパスを確認
         run: |
-          echo "===== test-resultsディレクトリ配下のファイルを一覧表示 ====="
-          ls -R app/build/test-results/  # すべてのサブディレクトリとファイルを再帰的に一覧表示
-          echo "===== reports/testsディレクトリ配下のファイルを一覧表示 ====="
+          echo "===== test-resultsディレクトリ配下 ====="
+          ls -R app/build/test-results/
+          echo "===== reports/testsディレクトリ配下 ====="
           ls -R app/build/reports/tests/
 
-      # 単体テストレポートをアップロード（XML結果とHTMLレポートを含む）
       - name: 単体テストレポートをアップロード
         uses: actions/upload-artifact@v4
         with:
           name: unit-test-report
           path: |
-            # テスト結果XML（Githubでサマリーを表示可能）
             app/build/test-results/testReleaseUnitTest/  
-            # 可視化HTMLレポート
             app/build/reports/tests/testReleaseUnitTest/  
 
-      # 新增：执行UI测试（与Release变体保持一致）
       - name: 実行UI测试
         run: |
-          ./gradlew connectedReleaseAndroidTest  # 连接模拟器执行UI测试
+          ./gradlew connectedReleaseAndroidTest
         continue-on-error: false
 
-      # 新增：上传UI测试报告
       - name: UI测试レポートをアップロード
         uses: actions/upload-artifact@v4
         with:
@@ -112,24 +106,20 @@ jobs:
             app/build/outputs/androidTest-results/connected/
             app/build/reports/androidTests/connected/
 
-      # 署名ファイルを準備
       - name: 署名ファイルを準備
         run: |
           mkdir -p app/signing
           echo "${{ secrets.KEYSTORE_FILE }}" | base64 --decode > app/signing/release.keystore
 
-      # Release APKを構築して署名（Lintとテストが通過した場合のみ実行）
       - name: APKを構築
         run: |
           chmod +x ./gradlew
-          # 署名ファイルの絶対パスを渡す（GITHUB_WORKSPACEを使用して基準を確保）
           ./gradlew assembleRelease \
             -Pandroid.injected.signing.store.file=${GITHUB_WORKSPACE}/app/signing/release.keystore \
             -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
             -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
             -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
 
-      # APK成果物をアップロード
       - name: APKをアップロード
         uses: actions/upload-artifact@v4
         with:
