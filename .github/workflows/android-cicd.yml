@@ -25,17 +25,7 @@ jobs:
           sudo apt-get install -y libqt5widgets5
           sudo apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils
 
-      - name: 验证硬件加速是否可用（调试用）
-        run: |
-          echo "检查KVM支持..."
-          egrep -c '(vmx|svm)' /proc/cpuinfo
-          
-          # 添加emulator目录到PATH（解决command not found）
-          export PATH=$ANDROID_HOME/emulator:$PATH
-          echo "模拟器命令路径：$(which emulator)"  # 验证是否找到命令
-          
-          emulator -accel-check  # 检查加速配置
-
+      # 关键调整：先安装Android SDK，再执行任何依赖SDK的操作（如emulator、sdkmanager）
       - name: Android SDKをインストール
         uses: android-actions/setup-android@v3
         with:
@@ -43,12 +33,28 @@ jobs:
           build-tools: 36.0.0
           system-images: android-33;google_apis;x86_64
 
+      # 调整后：SDK已安装，emulator存在，再验证硬件加速
+      - name: 验证硬件加速是否可用（调试用）
+        run: |
+          echo "检查KVM支持..."
+          egrep -c '(vmx|svm)' /proc/cpuinfo  # 输出4表示支持虚拟化
+          
+          # 强制添加SDK工具目录到PATH（覆盖可能的环境变量问题）
+          export PATH=$ANDROID_HOME/emulator:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$PATH
+          
+          echo "检查emulator命令路径..."
+          which emulator  # 输出路径表示找到，为空则表示仍有问题
+          
+          echo "检查加速配置..."
+          emulator -accel-check || echo "⚠️  硬件加速不可用，但继续执行（模拟器可能启动较慢）"
+        continue-on-error: true  # 即使加速检查失败，也不终止流程（兼容部分CI环境）
+
       - name: 手动安装系统镜像
         run: |
+          # 这里sdkmanager也是SDK工具，需确保PATH正确（android-actions已配置）
           sdkmanager "system-images;android-33;google_apis;x86_64"
         continue-on-error: false
 
-      # 后续步骤保持不变...
       - name: 创建模拟器
         run: |
           avdmanager create avd \
@@ -58,4 +64,106 @@ jobs:
             --force
           echo "✅ 模拟器创建成功（名称：test_emulator）"
 
-      # ...（其余步骤省略，保持不变）
+      - name: 启动模拟器（带详细日志）
+        run: |
+          # 启动前再次确认PATH（保险措施）
+          export PATH=$ANDROID_HOME/emulator:$PATH
+          emulator -avd test_emulator \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -verbose > emulator.log 2>&1 &
+          echo "✅ 模拟器已启动（后台运行，日志输出到emulator.log）"
+
+      - name: 等待模拟器启动（延长时间+状态检查）
+        run: |
+          echo "等待ADB连接..."
+          adb wait-for-device
+          
+          echo "每5秒检查一次设备状态（共尝试20次，总计100秒）..."
+          for i in {1..20}; do
+            STATE=$(adb get-state 2>/dev/null || echo "unknown")
+            echo "第$i次检查：设备状态=$STATE"
+            if [ "$STATE" = "device" ]; then
+              echo "设备已就绪！"
+              break
+            fi
+            sleep 5
+          done
+          
+          if [ "$STATE" != "device" ]; then
+            echo "❌ 模拟器启动超时！查看模拟器日志："
+            cat emulator.log
+            exit 1
+          fi
+          
+          echo "等待系统完全启动（额外30秒）..."
+          sleep 30
+          echo "✅ 模拟器启动完成，设备状态：$(adb get-state)"
+
+      - name: 查看连接的设备（调试用）
+        run: adb devices
+
+      # 后续步骤（Lint、测试、构建APK）保持不变...
+      - name: Lint静的解析を実行
+        run: |
+          chmod +x ./gradlew
+          ./gradlew lintRelease
+        continue-on-error: false
+
+      - name: Lintレポートをアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-release.html
+
+      - name: 単体テストを実行
+        run: ./gradlew testReleaseUnitTest
+        continue-on-error: false
+
+      - name: テストレポートの実際のパスを確認
+        run: |
+          echo "===== test-resultsディレクトリ配下 ====="
+          ls -R app/build/test-results/
+          echo "===== reports/testsディレクトリ配下 ====="
+          ls -R app/build/reports/tests/
+
+      - name: 単体テストレポートをアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: |
+            app/build/test-results/testReleaseUnitTest/  
+            app/build/reports/tests/testReleaseUnitTest/  
+
+      - name: 実行UI测试
+        run: ./gradlew connectedReleaseAndroidTest
+        continue-on-error: false
+
+      - name: UI测试レポートをアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-report
+          path: |
+            app/build/outputs/androidTest-results/connected/
+            app/build/reports/androidTests/connected/
+
+      - name: 署名ファイルを準備
+        run: |
+          mkdir -p app/signing
+          echo "${{ secrets.KEYSTORE_FILE }}" | base64 --decode > app/signing/release.keystore
+
+      - name: APKを構築
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=${GITHUB_WORKSPACE}/app/signing/release.keystore \
+            -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
+            -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
+            -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
+
+      - name: APKをアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-APP-Release
+          path: app/build/outputs/apk/release/app-release.apk
