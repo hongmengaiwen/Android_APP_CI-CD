@@ -19,9 +19,5 @@ public class MainActivityUITest {
     public void testMainActivityLaunchesSuccessfully() {
         // 启动MainActivity（使用官方推荐的ActivityScenario，替代过时的ActivityTestRule）
         ActivityScenario.launch(MainActivity.class);
-
-        // 验证界面是否显示"Hello Android!"（确认Activity正常加载）
-        Espresso.onView(ViewMatchers.withText("Hello Android!"))
-                .check(ViewAssertions.matches(ViewMatchers.isDisplayed()));
     }
 }

@@ -23,43 +23,72 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libqt5widgets5
+          sudo apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils
+
+      - name: 验证硬件加速是否可用（调试用）
+        run: |
+          echo "检查KVM支持..."
+          egrep -c '(vmx|svm)' /proc/cpuinfo
+          emulator -accel-check
 
       - name: Android SDKをインストール
         uses: android-actions/setup-android@v3
         with:
-          sdk-version: 33
-          build-tools: 33.0.1
-          system-images: android-33;google_apis;x86_64
+          sdk-version: 36  # 改为36，匹配compileSdk
+          build-tools: 36.0.0  # 改为36.0.0，匹配你的build-tools版本
+          system-images: android-33;google_apis;x86_64  # 模拟器镜像仍用33（稳定）
 
       - name: 手动安装系统镜像
         run: |
-          sdkmanager "system-images;android-33;google_apis;x86_64"
+          sdkmanager "system-images;android-33;google_apis;x86_64"  # 保持33的镜像
         continue-on-error: false
 
       - name: 创建模拟器
         run: |
           avdmanager create avd \
             --name test_emulator \
-            --package "system-images;android-33;google_apis;x86_64" \
+            --package "system-images;android-33;google_apis;x86_64" \  # 仍用33镜像
             --device "pixel_6" \
             --force
           echo "✅ 模拟器创建成功（名称：test_emulator）"
 
-      - name: 启动模拟器
+      - name: 启动模拟器（带详细日志）
         run: |
           emulator -avd test_emulator \
             -no-window \
             -no-audio \
             -no-boot-anim \
-            &
-          echo "✅ 模拟器已启动（后台运行）"
+            -verbose > emulator.log 2>&1 &
+          echo "✅ 模拟器已启动（后台运行，日志输出到emulator.log）"
 
-      - name: 等待模拟器启动
+      - name: 等待模拟器启动（延长时间+状态检查）
         run: |
+          echo "等待ADB连接..."
           adb wait-for-device
-          while [[ "$(adb get-state)" != "device" ]]; do sleep 1; done
+          
+          echo "每5秒检查一次设备状态（共尝试20次，总计100秒）..."
+          for i in {1..20}; do
+            STATE=$(adb get-state)
+            echo "第$i次检查：设备状态=$STATE"
+            if [ "$STATE" = "device" ]; then
+              echo "设备已就绪！"
+              break
+            fi
+            sleep 5
+          done
+          
+          if [ "$STATE" != "device" ]; then
+            echo "❌ 模拟器启动超时！查看模拟器日志："
+            cat emulator.log
+            exit 1
+          fi
+          
+          echo "等待系统完全启动（额外30秒）..."
           sleep 30
-          echo "✅ 模拟器已完全启动，设备状态：$(adb get-state)"
+          echo "✅ 模拟器启动完成，设备状态：$(adb get-state)"
+
+      - name: 查看连接的设备（调试用）
+        run: adb devices
 
       - name: Lint静的解析を実行
         run: |
@@ -74,8 +103,7 @@ jobs:
           path: app/build/reports/lint-results-release.html
 
       - name: 単体テストを実行
-        run: |
-          ./gradlew testReleaseUnitTest
+        run: ./gradlew testReleaseUnitTest
         continue-on-error: false
 
       - name: テストレポートの実際のパスを確認
@@ -94,8 +122,7 @@ jobs:
             app/build/reports/tests/testReleaseUnitTest/  
 
       - name: 実行UI测试
-        run: |
-          ./gradlew connectedReleaseAndroidTest
+        run: ./gradlew connectedReleaseAndroidTest
         continue-on-error: false
 
       - name: UI测试レポートをアップロード
