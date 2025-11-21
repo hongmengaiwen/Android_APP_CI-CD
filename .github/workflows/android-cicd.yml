@@ -7,6 +7,7 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20  # 延长总超时时间（默认10分钟可能不够）
 
     steps:
       - name: コードを取得
@@ -24,85 +25,97 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libqt5widgets5
           sudo apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils
+          # 新增：安装软件渲染依赖（兼容CI无GPU环境）
+          sudo apt-get install -y libgl1-mesa-glx
 
-      # 关键调整：先安装Android SDK，再执行任何依赖SDK的操作（如emulator、sdkmanager）
       - name: Android SDKをインストール
         uses: android-actions/setup-android@v3
         with:
           sdk-version: 36
           build-tools: 36.0.0
-          system-images: android-33;google_apis;x86_64
+          # 改用更轻量的镜像（google_apis_playstore更稳定，启动更快）
+          system-images: android-33;google_apis_playstore;x86_64
 
-      # 调整后：SDK已安装，emulator存在，再验证硬件加速
+      - name: 验证系统镜像是否安装成功（调试用）
+        run: |
+          echo "查看已安装的系统镜像："
+          sdkmanager --list | grep "system-images;android-33;google_apis_playstore;x86_64"
+        continue-on-error: true
+
       - name: 验证硬件加速是否可用（调试用）
         run: |
           echo "检查KVM支持..."
-          egrep -c '(vmx|svm)' /proc/cpuinfo  # 输出4表示支持虚拟化
-          
-          # 强制添加SDK工具目录到PATH（覆盖可能的环境变量问题）
+          egrep -c '(vmx|svm)' /proc/cpuinfo
           export PATH=$ANDROID_HOME/emulator:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$PATH
-          
-          echo "检查emulator命令路径..."
-          which emulator  # 输出路径表示找到，为空则表示仍有问题
-          
-          echo "检查加速配置..."
-          emulator -accel-check || echo "⚠️  硬件加速不可用，但继续执行（模拟器可能启动较慢）"
-        continue-on-error: true  # 即使加速检查失败，也不终止流程（兼容部分CI环境）
+          emulator -accel-check || echo "⚠️  硬件加速不可用，将使用软件渲染"
+        continue-on-error: true
 
-      - name: 手动安装系统镜像
+      - name: 创建轻量模拟器（关键优化）
         run: |
-          # 这里sdkmanager也是SDK工具，需确保PATH正确（android-actions已配置）
-          sdkmanager "system-images;android-33;google_apis;x86_64"
-        continue-on-error: false
-
-      - name: 创建模拟器
-        run: |
+          export PATH=$ANDROID_HOME/emulator:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$PATH
+          # 改用Pixel 4a（比Pixel 6更轻量，占用资源少）
           avdmanager create avd \
             --name test_emulator \
-            --package "system-images;android-33;google_apis;x86_64" \
-            --device "pixel_6" \
-            --force
-          echo "✅ 模拟器创建成功（名称：test_emulator）"
+            --package "system-images;android-33;google_apis_playstore;x86_64" \
+            --device "pixel_4a" \
+            --force \
+            # 禁用硬件键盘（减少资源占用）
+            --sdcard 128M  # 最小化SD卡容量
+          echo "✅ 轻量模拟器创建成功"
 
-      - name: 启动模拟器（带详细日志）
+      - name: 启动模拟器（参数优化，加速启动）
         run: |
-          # 启动前再次确认PATH（保险措施）
           export PATH=$ANDROID_HOME/emulator:$PATH
+          # 核心优化参数：指定内存、软件渲染、禁用不必要功能
           emulator -avd test_emulator \
             -no-window \
             -no-audio \
             -no-boot-anim \
+            -no-snapshot-save \
+            -no-snapshot-load \
+            -memory 2048 \  # 限制内存为2GB（适配CI环境）
+            -gpu swiftshader_indirect \  # 软件渲染（CI无GPU）
+            -skin 1080x2340 \  # 匹配Pixel 4a屏幕，避免分辨率过高
             -verbose > emulator.log 2>&1 &
-          echo "✅ 模拟器已启动（后台运行，日志输出到emulator.log）"
+          echo "✅ 模拟器已启动（后台运行）"
 
-      - name: 等待模拟器启动（延长时间+状态检查）
+      - name: 等待模拟器启动（精准判断，延长超时）
         run: |
+          export PATH=$ANDROID_HOME/platform-tools:$PATH
           echo "等待ADB连接..."
           adb wait-for-device
           
-          echo "每5秒检查一次设备状态（共尝试20次，总计100秒）..."
-          for i in {1..20}; do
+          # 关键：等待系统启动完成（通过检查boot_completed属性）
+          echo "等待系统初始化（最多150秒）..."
+          for i in {1..30}; do
+            # 检查系统是否启动完成（boot_completed=1表示就绪）
+            BOOT_COMPLETED=$(adb shell getprop sys.boot_completed 2>/dev/null || echo 0)
             STATE=$(adb get-state 2>/dev/null || echo "unknown")
-            echo "第$i次检查：设备状态=$STATE"
-            if [ "$STATE" = "device" ]; then
-              echo "设备已就绪！"
+            echo "第$i次检查：boot_completed=$BOOT_COMPLETED | 设备状态=$STATE"
+          
+            if [ "$BOOT_COMPLETED" = "1" ] && [ "$STATE" = "device" ]; then
+              echo "✅ 模拟器完全就绪！"
               break
             fi
             sleep 5
           done
           
-          if [ "$STATE" != "device" ]; then
-            echo "❌ 模拟器启动超时！查看模拟器日志："
+          # 超时判断
+          BOOT_COMPLETED=$(adb shell getprop sys.boot_completed 2>/dev/null || echo 0)
+          STATE=$(adb get-state 2>/dev/null || echo "unknown")
+          if [ "$BOOT_COMPLETED" != "1" ] || [ "$STATE" != "device" ]; then
+            echo "❌ 模拟器启动超时！输出日志和进程信息："
             cat emulator.log
+            echo "当前模拟器进程："
+            ps aux | grep emulator
             exit 1
           fi
-          
-          echo "等待系统完全启动（额外30秒）..."
-          sleep 30
-          echo "✅ 模拟器启动完成，设备状态：$(adb get-state)"
 
       - name: 查看连接的设备（调试用）
-        run: adb devices
+        run: |
+          export PATH=$ANDROID_HOME/platform-tools:$PATH
+          adb devices
+          adb shell getprop ro.build.version.release  # 输出Android版本，确认启动成功
 
       # 后续步骤（Lint、测试、构建APK）保持不变...
       - name: Lint静的解析を実行
