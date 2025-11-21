@@ -20,38 +20,59 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      # 修复：用 libgl1 替代废弃的 libgl1-mesa-glx（Ubuntu 22.04 兼容）
       - name: 模拟器依赖库安装
         run: |
           sudo apt-get update -y
-          # 必需依赖：libqt5widgets5（模拟器GUI核心）+ libgl1（软件渲染依赖，替代旧包）
           sudo apt-get install -y libqt5widgets5 libgl1
-          sudo apt-get clean  # 清理缓存，减少磁盘占用
+          sudo apt-get clean
 
       - name: Android SDKをインストール
         uses: android-actions/setup-android@v3
         with:
           sdk-version: 36
           build-tools: 36.0.0
+          # 明确指定镜像，确保sdkmanager能识别
           system-images: android-33;google_apis_playstore;x86_64
+          # 强制安装cmdline-tools（包含sdkmanager）
+          include cmdline-tools: latest
 
-      - name: 验证系统镜像是否安装成功（调试用）
+      - name: 配置SDK工具PATH（关键修复）
         run: |
-          echo "查看已安装的系统镜像："
-          sdkmanager --list | grep "system-images;android-33;google_apis_playstore;x86_64"
-        continue-on-error: true
+          # 添加cmdline-tools（sdkmanager）、emulator、platform-tools到PATH
+          echo "PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH" >> $GITHUB_ENV
+        shell: bash
+
+      - name: 手动安装系统镜像（带详细日志）
+        run: |
+          # 显示sdkmanager路径，确认命令可用
+          which sdkmanager
+          # 安装镜像并输出详细日志，确保安装成功
+          sdkmanager --verbose "system-images;android-33;google_apis_playstore;x86_64"
+        continue-on-error: false  # 镜像安装失败直接终止
+
+      - name: 验证镜像安装成功（强制校验）
+        run: |
+          echo "===== 已安装的系统镜像列表 ====="
+          sdkmanager --list | grep -E "system-images;android-33;google_apis_playstore;x86_64"
+          # 若未找到镜像，直接报错终止
+          if [ $? -ne 0 ]; then
+            echo "❌ 系统镜像未安装成功！"
+            exit 1
+          fi
+          echo "✅ 镜像验证通过"
 
       - name: 验证硬件加速是否可用（调试用）
         run: |
-          echo "检查KVM支持（仅日志，不依赖）..."
+          echo "检查KVM支持..."
           egrep -c '(vmx|svm)' /proc/cpuinfo || echo "KVM未支持"
-          export PATH=$ANDROID_HOME/emulator:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$PATH
           emulator -accel-check || echo "⚠️  硬件加速不可用，使用软件渲染"
         continue-on-error: true
 
-      - name: 创建轻量模拟器
+      - name: 创建轻量模拟器（修复路径）
         run: |
-          export PATH=$ANDROID_HOME/emulator:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$PATH
+          # 确认avdmanager路径
+          which avdmanager
+          # 创建模拟器，明确指定镜像包名
           avdmanager create avd \
             --name test_emulator \
             --package "system-images;android-33;google_apis_playstore;x86_64" \
@@ -62,7 +83,6 @@ jobs:
 
       - name: 启动模拟器（参数优化）
         run: |
-          export PATH=$ANDROID_HOME/emulator:$PATH
           emulator -avd test_emulator \
             -no-window \
             -no-audio \
@@ -77,8 +97,6 @@ jobs:
 
       - name: 等待模拟器启动（精准判断）
         run: |
-          export PATH=$ANDROID_HOME/platform-tools:$PATH
-          echo "等待ADB连接..."
           adb wait-for-device
           
           echo "等待系统初始化（最多150秒）..."
@@ -104,7 +122,6 @@ jobs:
 
       - name: 查看连接的设备（调试用）
         run: |
-          export PATH=$ANDROID_HOME/platform-tools:$PATH
           adb devices
           adb shell getprop ro.build.version.release
 
