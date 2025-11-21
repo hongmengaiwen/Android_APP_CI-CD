@@ -47,17 +47,16 @@ jobs:
           ls -R $ANDROID_HOME/system-images/android-33/
         continue-on-error: false
 
-      # 修复：修正avdmanager命令换行格式，确保所有参数属于同一命令
+      # 修复：删除不支持的--no-hardware-keyboard参数，仅保留官方认可选项
       - name: 创建超轻量模拟器（极致降低资源）
         run: |
           which avdmanager
           avdmanager create avd \
             --name test_emulator \
             --package "system-images;android-33;google_apis;x86_64" \
-            --device "pixel_3a" \  # 反斜杠后无多余空格，确保参数连续
+            --device "pixel_3a" \
             --force \
-            --sdcard 64M \
-            --no-hardware-keyboard
+            --sdcard 64M
           echo "✅ 超轻量模拟器创建成功"
 
       - name: 启动模拟器（兼容渲染+端口绑定）
