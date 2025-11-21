@@ -7,7 +7,7 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25  # 适当延长总超时
 
     steps:
       - name: コードを取得
@@ -31,100 +31,110 @@ jobs:
         with:
           sdk-version: 36
           build-tools: 36.0.0
-          # 明确指定镜像，确保sdkmanager能识别
-          system-images: android-33;google_apis_playstore;x86_64
-          # 强制安装cmdline-tools（包含sdkmanager）
+          system-images: android-33;google_apis;x86_64  # 改用更轻量的google_apis镜像（去掉PlayStore）
           include cmdline-tools: latest
 
-      - name: 配置SDK工具PATH（关键修复）
+      - name: 配置SDK工具PATH
         run: |
-          # 添加cmdline-tools（sdkmanager）、emulator、platform-tools到PATH
           echo "PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH" >> $GITHUB_ENV
         shell: bash
 
-      - name: 手动安装系统镜像（带详细日志）
+      - name: 手动安装系统镜像（带校验）
         run: |
-          # 显示sdkmanager路径，确认命令可用
           which sdkmanager
-          # 安装镜像并输出详细日志，确保安装成功
-          sdkmanager --verbose "system-images;android-33;google_apis_playstore;x86_64"
-        continue-on-error: false  # 镜像安装失败直接终止
+          sdkmanager --verbose "system-images;android-33;google_apis;x86_64"
+          # 校验镜像安装路径
+          echo "===== 镜像安装路径检查 ====="
+          ls -R $ANDROID_HOME/system-images/android-33/
+        continue-on-error: false
 
-      - name: 验证镜像安装成功（强制校验）
+      - name: 创建超轻量模拟器（极致降低资源）
         run: |
-          echo "===== 已安装的系统镜像列表 ====="
-          sdkmanager --list | grep -E "system-images;android-33;google_apis_playstore;x86_64"
-          # 若未找到镜像，直接报错终止
-          if [ $? -ne 0 ]; then
-            echo "❌ 系统镜像未安装成功！"
-            exit 1
-          fi
-          echo "✅ 镜像验证通过"
-
-      - name: 验证硬件加速是否可用（调试用）
-        run: |
-          echo "检查KVM支持..."
-          egrep -c '(vmx|svm)' /proc/cpuinfo || echo "KVM未支持"
-          emulator -accel-check || echo "⚠️  硬件加速不可用，使用软件渲染"
-        continue-on-error: true
-
-      - name: 创建轻量模拟器（修复路径）
-        run: |
-          # 确认avdmanager路径
           which avdmanager
-          # 创建模拟器，明确指定镜像包名
+          # 关键：禁用所有非必需功能，最小化资源占用
           avdmanager create avd \
             --name test_emulator \
-            --package "system-images;android-33;google_apis_playstore;x86_64" \
-            --device "pixel_4a" \
+            --package "system-images;android-33;google_apis;x86_64" \
+            --device "pixel_3a"  # 比Pixel 4a更轻量（屏幕更小、配置更低）\
             --force \
-            --sdcard 128M
-          echo "✅ 轻量模拟器创建成功"
+            --sdcard 64M \  # 进一步减小SD卡容量
+            --no-hardware-keyboard  # 明确禁用硬件键盘
+          echo "✅ 超轻量模拟器创建成功"
 
-      - name: 启动模拟器（参数优化）
+      - name: 启动模拟器（兼容渲染+端口绑定）
         run: |
+          # 关键优化：指定ADB端口+兼容渲染+关闭冗余功能
           emulator -avd test_emulator \
             -no-window \
             -no-audio \
             -no-boot-anim \
             -no-snapshot-save \
             -no-snapshot-load \
-            -memory 2048 \
-            -gpu swiftshader_indirect \
-            -skin 1080x2340 \
+            -no-cache \  # 禁用缓存，避免占用资源
+            -memory 1536 \  # 进一步降低内存到1.5GB（CI环境极限）
+            -gpu angle_indirect \  # 更兼容CI的软件渲染方案（替代swiftshader）
+            -port 5554 \  # 绑定固定ADB端口，避免冲突
+            -skin 720x1560 \  # 匹配Pixel 3a屏幕（更低分辨率）
             -verbose > emulator.log 2>&1 &
-          echo "✅ 模拟器已启动（后台运行）"
+          echo "✅ 模拟器已启动（绑定ADB端口5554）"
+          # 输出模拟器进程ID，便于后续检查
+          echo "模拟器进程ID：$!"
 
-      - name: 等待模拟器启动（精准判断）
+      - name: 等待模拟器启动（带进程/端口检查）
         run: |
+          export PATH=$ANDROID_HOME/platform-tools:$PATH
+          echo "等待ADB连接（端口5554）..."
           adb wait-for-device
-          
-          echo "等待系统初始化（最多150秒）..."
-          for i in {1..30}; do
-            BOOT_COMPLETED=$(adb shell getprop sys.boot_completed 2>/dev/null || echo 0)
+
+          echo "开始检查设备状态（最多180秒，每5秒一次）..."
+          for i in {1..36}; do
+            # 1. 检查模拟器进程是否还在运行
+            EMULATOR_PID=$(ps aux | grep "test_emulator" | grep -v grep | awk '{print $2}')
+            if [ -z "$EMULATOR_PID" ]; then
+              echo "❌ 模拟器进程已崩溃！"
+              cat emulator.log
+              exit 1
+            fi
+
+            # 2. 检查ADB端口是否监听
+            PORT_LISTEN=$(netstat -tuln | grep 5554 || echo "未监听")
+            echo "第$i次检查：进程ID=$EMULATOR_PID | 端口状态=$PORT_LISTEN"
+
+            # 3. 检查设备状态和系统启动标志
             STATE=$(adb get-state 2>/dev/null || echo "unknown")
-            echo "第$i次检查：boot_completed=$BOOT_COMPLETED | 设备状态=$STATE"
-          
-            if [ "$BOOT_COMPLETED" = "1" ] && [ "$STATE" = "device" ]; then
+            BOOT_COMPLETED=$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || echo 0)
+            echo "设备状态=$STATE | boot_completed=$BOOT_COMPLETED"
+
+            # 4. 若设备就绪，退出循环
+            if [ "$STATE" = "device" ] && [ "$BOOT_COMPLETED" = "1" ]; then
               echo "✅ 模拟器完全就绪！"
+              adb devices  # 输出最终设备列表
               break
             fi
+
             sleep 5
           done
-          
-          BOOT_COMPLETED=$(adb shell getprop sys.boot_completed 2>/dev/null || echo 0)
+
+          # 超时校验
           STATE=$(adb get-state 2>/dev/null || echo "unknown")
-          if [ "$BOOT_COMPLETED" != "1" ] || [ "$STATE" != "device" ]; then
-            echo "❌ 模拟器启动超时！输出日志："
-            cat emulator.log
+          BOOT_COMPLETED=$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || echo 0)
+          if [ "$STATE" != "device" ] || [ "$BOOT_COMPLETED" != "1" ]; then
+            echo "❌ 模拟器启动超时！输出关键信息："
+            echo "=== 模拟器日志最后100行 ==="
+            tail -n 100 emulator.log
+            echo "=== 当前进程列表 ==="
+            ps aux | grep emulator
+            echo "=== ADB设备列表 ==="
+            adb devices -l
             exit 1
           fi
 
-      - name: 查看连接的设备（调试用）
+      - name: 查看连接的设备（最终校验）
         run: |
-          adb devices
-          adb shell getprop ro.build.version.release
+          adb devices -l
+          adb -s emulator-5554 shell getprop ro.build.version.release
 
+      # 后续步骤（Lint、测试、构建APK）保持不变...
       - name: Lint静的解析を実行
         run: |
           chmod +x ./gradlew
