@@ -7,7 +7,7 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20  # 延长总超时时间（默认10分钟可能不够）
+    timeout-minutes: 20
 
     steps:
       - name: コードを取得
@@ -20,20 +20,22 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
+      # 简化依赖库安装（只保留必需项，去掉KVM相关包）
       - name: 模拟器依赖库安装
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libqt5widgets5
-          sudo apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils
-          # 新增：安装软件渲染依赖（兼容CI无GPU环境）
-          sudo apt-get install -y libgl1-mesa-glx
+          sudo apt-get update -y
+          # 只安装2个必需依赖：
+          # 1. libqt5widgets5：模拟器GUI依赖（即使-no-window也需要）
+          # 2. libgl1-mesa-glx：软件渲染依赖（适配CI无GPU环境）
+          sudo apt-get install -y libqt5widgets5 libgl1-mesa-glx
+          # 清理APT缓存，减少磁盘占用
+          sudo apt-get clean
 
       - name: Android SDKをインストール
         uses: android-actions/setup-android@v3
         with:
           sdk-version: 36
           build-tools: 36.0.0
-          # 改用更轻量的镜像（google_apis_playstore更稳定，启动更快）
           system-images: android-33;google_apis_playstore;x86_64
 
       - name: 验证系统镜像是否安装成功（调试用）
@@ -44,51 +46,46 @@ jobs:
 
       - name: 验证硬件加速是否可用（调试用）
         run: |
-          echo "检查KVM支持..."
-          egrep -c '(vmx|svm)' /proc/cpuinfo
+          echo "检查KVM支持（仅日志，不依赖）..."
+          egrep -c '(vmx|svm)' /proc/cpuinfo || echo "KVM未支持"
           export PATH=$ANDROID_HOME/emulator:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$PATH
-          emulator -accel-check || echo "⚠️  硬件加速不可用，将使用软件渲染"
+          emulator -accel-check || echo "⚠️  硬件加速不可用，使用软件渲染"
         continue-on-error: true
 
-      - name: 创建轻量模拟器（关键优化）
+      - name: 创建轻量模拟器
         run: |
           export PATH=$ANDROID_HOME/emulator:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$PATH
-          # 改用Pixel 4a（比Pixel 6更轻量，占用资源少）
           avdmanager create avd \
             --name test_emulator \
             --package "system-images;android-33;google_apis_playstore;x86_64" \
             --device "pixel_4a" \
             --force \
-            # 禁用硬件键盘（减少资源占用）
-            --sdcard 128M  # 最小化SD卡容量
+            --sdcard 128M
           echo "✅ 轻量模拟器创建成功"
 
-      - name: 启动模拟器（参数优化，加速启动）
+      - name: 启动模拟器（参数优化）
         run: |
           export PATH=$ANDROID_HOME/emulator:$PATH
-          # 核心优化参数：指定内存、软件渲染、禁用不必要功能
           emulator -avd test_emulator \
             -no-window \
             -no-audio \
             -no-boot-anim \
             -no-snapshot-save \
             -no-snapshot-load \
-            -memory 2048 \  # 限制内存为2GB（适配CI环境）
-            -gpu swiftshader_indirect \  # 软件渲染（CI无GPU）
-            -skin 1080x2340 \  # 匹配Pixel 4a屏幕，避免分辨率过高
+            -memory 2048 \
+            -gpu swiftshader_indirect \
+            -skin 1080x2340 \
             -verbose > emulator.log 2>&1 &
           echo "✅ 模拟器已启动（后台运行）"
 
-      - name: 等待模拟器启动（精准判断，延长超时）
+      - name: 等待模拟器启动（精准判断）
         run: |
           export PATH=$ANDROID_HOME/platform-tools:$PATH
           echo "等待ADB连接..."
           adb wait-for-device
           
-          # 关键：等待系统启动完成（通过检查boot_completed属性）
           echo "等待系统初始化（最多150秒）..."
           for i in {1..30}; do
-            # 检查系统是否启动完成（boot_completed=1表示就绪）
             BOOT_COMPLETED=$(adb shell getprop sys.boot_completed 2>/dev/null || echo 0)
             STATE=$(adb get-state 2>/dev/null || echo "unknown")
             echo "第$i次检查：boot_completed=$BOOT_COMPLETED | 设备状态=$STATE"
@@ -100,14 +97,11 @@ jobs:
             sleep 5
           done
           
-          # 超时判断
           BOOT_COMPLETED=$(adb shell getprop sys.boot_completed 2>/dev/null || echo 0)
           STATE=$(adb get-state 2>/dev/null || echo "unknown")
           if [ "$BOOT_COMPLETED" != "1" ] || [ "$STATE" != "device" ]; then
-            echo "❌ 模拟器启动超时！输出日志和进程信息："
+            echo "❌ 模拟器启动超时！输出日志："
             cat emulator.log
-            echo "当前模拟器进程："
-            ps aux | grep emulator
             exit 1
           fi
 
@@ -115,9 +109,9 @@ jobs:
         run: |
           export PATH=$ANDROID_HOME/platform-tools:$PATH
           adb devices
-          adb shell getprop ro.build.version.release  # 输出Android版本，确认启动成功
+          adb shell getprop ro.build.version.release
 
-      # 后续步骤（Lint、测试、构建APK）保持不变...
+      # 后续步骤保持不变...
       - name: Lint静的解析を実行
         run: |
           chmod +x ./gradlew
