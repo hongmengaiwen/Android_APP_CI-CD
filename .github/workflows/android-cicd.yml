@@ -20,16 +20,13 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      # 简化依赖库安装（只保留必需项，去掉KVM相关包）
+      # 修复：用 libgl1 替代废弃的 libgl1-mesa-glx（Ubuntu 22.04 兼容）
       - name: 模拟器依赖库安装
         run: |
           sudo apt-get update -y
-          # 只安装2个必需依赖：
-          # 1. libqt5widgets5：模拟器GUI依赖（即使-no-window也需要）
-          # 2. libgl1-mesa-glx：软件渲染依赖（适配CI无GPU环境）
-          sudo apt-get install -y libqt5widgets5 libgl1-mesa-glx
-          # 清理APT缓存，减少磁盘占用
-          sudo apt-get clean
+          # 必需依赖：libqt5widgets5（模拟器GUI核心）+ libgl1（软件渲染依赖，替代旧包）
+          sudo apt-get install -y libqt5widgets5 libgl1
+          sudo apt-get clean  # 清理缓存，减少磁盘占用
 
       - name: Android SDKをインストール
         uses: android-actions/setup-android@v3
@@ -111,7 +108,6 @@ jobs:
           adb devices
           adb shell getprop ro.build.version.release
 
-      # 后续步骤保持不变...
       - name: Lint静的解析を実行
         run: |
           chmod +x ./gradlew
