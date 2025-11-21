@@ -7,7 +7,7 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25  # 适当延长总超时
+    timeout-minutes: 25
 
     steps:
       - name: コードを取得
@@ -31,7 +31,7 @@ jobs:
         with:
           sdk-version: 36
           build-tools: 36.0.0
-          system-images: android-33;google_apis;x86_64  # 改用更轻量的google_apis镜像（去掉PlayStore）
+          system-images: android-33;google_apis;x86_64
           include cmdline-tools: latest
 
       - name: 配置SDK工具PATH
@@ -43,41 +43,38 @@ jobs:
         run: |
           which sdkmanager
           sdkmanager --verbose "system-images;android-33;google_apis;x86_64"
-          # 校验镜像安装路径
           echo "===== 镜像安装路径检查 ====="
           ls -R $ANDROID_HOME/system-images/android-33/
         continue-on-error: false
 
+      # 修复：修正avdmanager命令换行格式，确保所有参数属于同一命令
       - name: 创建超轻量模拟器（极致降低资源）
         run: |
           which avdmanager
-          # 关键：禁用所有非必需功能，最小化资源占用
           avdmanager create avd \
             --name test_emulator \
             --package "system-images;android-33;google_apis;x86_64" \
-            --device "pixel_3a"  # 比Pixel 4a更轻量（屏幕更小、配置更低）\
+            --device "pixel_3a" \  # 反斜杠后无多余空格，确保参数连续
             --force \
-            --sdcard 64M \  # 进一步减小SD卡容量
-            --no-hardware-keyboard  # 明确禁用硬件键盘
+            --sdcard 64M \
+            --no-hardware-keyboard
           echo "✅ 超轻量模拟器创建成功"
 
       - name: 启动模拟器（兼容渲染+端口绑定）
         run: |
-          # 关键优化：指定ADB端口+兼容渲染+关闭冗余功能
           emulator -avd test_emulator \
             -no-window \
             -no-audio \
             -no-boot-anim \
             -no-snapshot-save \
             -no-snapshot-load \
-            -no-cache \  # 禁用缓存，避免占用资源
-            -memory 1536 \  # 进一步降低内存到1.5GB（CI环境极限）
-            -gpu angle_indirect \  # 更兼容CI的软件渲染方案（替代swiftshader）
-            -port 5554 \  # 绑定固定ADB端口，避免冲突
-            -skin 720x1560 \  # 匹配Pixel 3a屏幕（更低分辨率）
+            -no-cache \
+            -memory 1536 \
+            -gpu angle_indirect \
+            -port 5554 \
+            -skin 720x1560 \
             -verbose > emulator.log 2>&1 &
           echo "✅ 模拟器已启动（绑定ADB端口5554）"
-          # 输出模拟器进程ID，便于后续检查
           echo "模拟器进程ID：$!"
 
       - name: 等待模拟器启动（带进程/端口检查）
@@ -88,7 +85,6 @@ jobs:
 
           echo "开始检查设备状态（最多180秒，每5秒一次）..."
           for i in {1..36}; do
-            # 1. 检查模拟器进程是否还在运行
             EMULATOR_PID=$(ps aux | grep "test_emulator" | grep -v grep | awk '{print $2}')
             if [ -z "$EMULATOR_PID" ]; then
               echo "❌ 模拟器进程已崩溃！"
@@ -96,26 +92,22 @@ jobs:
               exit 1
             fi
 
-            # 2. 检查ADB端口是否监听
             PORT_LISTEN=$(netstat -tuln | grep 5554 || echo "未监听")
             echo "第$i次检查：进程ID=$EMULATOR_PID | 端口状态=$PORT_LISTEN"
 
-            # 3. 检查设备状态和系统启动标志
             STATE=$(adb get-state 2>/dev/null || echo "unknown")
             BOOT_COMPLETED=$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || echo 0)
             echo "设备状态=$STATE | boot_completed=$BOOT_COMPLETED"
 
-            # 4. 若设备就绪，退出循环
             if [ "$STATE" = "device" ] && [ "$BOOT_COMPLETED" = "1" ]; then
               echo "✅ 模拟器完全就绪！"
-              adb devices  # 输出最终设备列表
+              adb devices
               break
             fi
 
             sleep 5
           done
 
-          # 超时校验
           STATE=$(adb get-state 2>/dev/null || echo "unknown")
           BOOT_COMPLETED=$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || echo 0)
           if [ "$STATE" != "device" ] || [ "$BOOT_COMPLETED" != "1" ]; then
@@ -134,7 +126,6 @@ jobs:
           adb devices -l
           adb -s emulator-5554 shell getprop ro.build.version.release
 
-      # 后续步骤（Lint、测试、构建APK）保持不变...
       - name: Lint静的解析を実行
         run: |
           chmod +x ./gradlew
